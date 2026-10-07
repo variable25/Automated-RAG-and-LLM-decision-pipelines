@@ -1,0 +1,15 @@
+# Keep the build context small and secrets out of the image.
+.env
+.git/
+.github/
+.claude/
+.venv/
+.pytest_cache/
+**/__pycache__/
+*.egg-info/
+data/
+models/
+hf_cache/
+tests/
+web/node_modules/
+web/dist/
