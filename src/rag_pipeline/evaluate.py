@@ -203,6 +203,7 @@ def main() -> None:
             grid, best = tune(tune_w)
             policies = {"never": {}, "always": {}, "adaptive": best}
             summary, test_preds = [], {}
+            conn.execute("DELETE FROM runs WHERE model = %s", (model,))  # re-runs replace, predictions cascade
             for mode, params in policies.items():
                 pt, ct = params.get("pop_threshold", 0), params.get("conf_threshold", 0)
                 for split_name, part in [("tune", tune_w), ("test", test_w), ("all", w)]:
