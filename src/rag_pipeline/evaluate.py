@@ -1,7 +1,13 @@
 """Stage 3: score cached generations, tune adaptive thresholds, store runs in Postgres.
 
+Scoring
+  lenient (primary)  : strict match, or answer tokens within an accepted answer ("Catholic" ~
+                       "Catholic Church"), or an accepted answer's tokens within the output in any
+                       order ("noir crime film" ~ "film noir"), or a near-identical spelling
+  strict (audit)     : an accepted PopQA answer string appears in the normalized output
+
 Metrics (per mode)
-  accuracy           : any accepted PopQA answer string appears in the normalized output
+  accuracy           : lenient score; strict_accuracy is kept alongside for audits
   hallucination_rate : answered (not "I don't know") but wrong
   abstain_rate       : "I don't know"
   retrieval_rate     : share of questions that triggered retrieval (cost proxy)
@@ -13,6 +19,8 @@ Run: python -m rag_pipeline.evaluate
 import json
 import re
 import string
+import unicodedata
+from difflib import SequenceMatcher
 
 import numpy as np
 import pandas as pd
@@ -26,11 +34,18 @@ CONF_GRID = np.round(np.arange(0.0, 1.0001, 0.05), 2)
 POP_QUANTILES = np.arange(0.0, 1.0001, 0.1)
 _ABSTAIN = re.compile(r"\b(i don'?t know|i do not know|unknown|not sure)\b")
 _ARTICLES = re.compile(r"\b(a|an|the)\b")
+# too vague to count as a match on their own ("film" vs "horror film")
+_GENERIC = {"film", "movie", "music", "church", "album", "song", "band", "series", "novel", "rock", "pop"}
+FUZZY_RATIO = 0.9
 
 
 # ---------- scoring ----------
+def _fold_accents(s: str) -> str:
+    return "".join(ch for ch in unicodedata.normalize("NFKD", s) if not unicodedata.combining(ch))
+
+
 def normalize(s: str) -> str:
-    s = s.lower().replace("’", "'")
+    s = _fold_accents(s).lower().replace("’", "'")
     s = "".join(ch for ch in s if ch not in set(string.punctuation) - {"'"})
     return " ".join(_ARTICLES.sub(" ", s).split())
 
@@ -44,9 +59,31 @@ def is_correct(answer: str, possible_answers: list[str]) -> bool:
     return any(normalize(p) and normalize(p) in a for p in possible_answers)
 
 
+def is_correct_lenient(answer: str, possible_answers: list[str]) -> bool:
+    if is_correct(answer, possible_answers):
+        return True
+    if is_abstain(answer):
+        return False
+    a = normalize(answer)
+    at = set(a.split())
+    for p in possible_answers:
+        g = normalize(p)
+        gt = set(g.split())
+        if not g:
+            continue
+        if at and at <= gt and at - _GENERIC:  # partial answer, e.g. surname only
+            return True
+        if gt <= at and gt - _GENERIC:  # same words, different order
+            return True
+        if len(g) >= 6 and SequenceMatcher(None, a, g).ratio() >= FUZZY_RATIO:  # spelling variant
+            return True
+    return False
+
+
 def score(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["correct"] = [is_correct(a, p) for a, p in zip(df["answer"], df["possible_answers"])]
+    df["correct_strict"] = [is_correct(a, p) for a, p in zip(df["answer"], df["possible_answers"])]
+    df["correct"] = [is_correct_lenient(a, p) for a, p in zip(df["answer"], df["possible_answers"])]
     df["abstained"] = df["answer"].map(is_abstain) & ~df["correct"]
     df["hallucinated"] = ~df["correct"] & ~df["abstained"]
     return df

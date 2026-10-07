@@ -1,7 +1,8 @@
 import pandas as pd
 import pytest
 
-from rag_pipeline.evaluate import apply_policy, is_abstain, is_correct, metrics, score, tune, wide
+from rag_pipeline.evaluate import (apply_policy, is_abstain, is_correct, is_correct_lenient, metrics, score, tune,
+                                   wide)
 
 
 @pytest.mark.parametrize("answer,answers,expected", [
@@ -13,6 +14,31 @@ from rag_pipeline.evaluate import apply_policy, is_abstain, is_correct, metrics,
 ])
 def test_is_correct(answer, answers, expected):
     assert is_correct(answer, answers) is expected
+
+
+def test_is_correct_folds_accents():
+    assert is_correct("Sebastian Gutiérrez.", ["Sebastian Gutierrez"])
+
+
+@pytest.mark.parametrize("answer,answers,expected", [
+    ("Catholic.", ["Catholic Church"], True),           # partial answer
+    ("Jutra.", ["Claude Jutra"], True),                 # surname only
+    ("Noir crime film.", ["film noir"], True),          # reordered words
+    ("Swein Forkbeard.", ["Sweyn Forkbeard"], True),    # spelling variant
+    ("Slasher film.", ["horror film"], False),          # different genre
+    ("Film.", ["horror film"], False),                  # too vague
+    ("Anglican Church", ["Catholic Church"], False),
+    ("I don't know.", ["I Know"], False),          # abstentions never match
+    ("Stephen Mazur.", ["Steven Shainberg"], False),
+])
+def test_is_correct_lenient(answer, answers, expected):
+    assert is_correct_lenient(answer, answers) is expected
+
+
+def test_score_keeps_strict_alongside_lenient():
+    df = score(pd.DataFrame({"answer": ["Catholic.", "Paris"], "possible_answers": [["Catholic Church"], ["paris"]]}))
+    assert df["correct"].tolist() == [True, True]
+    assert df["correct_strict"].tolist() == [False, True]
 
 
 def test_is_abstain():
