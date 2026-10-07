@@ -14,7 +14,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-api.txt
       # Tests are pure Python: no GPU, model weights or Postgres needed.
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt -r requirements-api.txt
       - run: pytest -q
