@@ -3,6 +3,9 @@ import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { useApi } from "../api";
+import { Link } from "../router";
+import { ChartSkeleton } from "../Skeleton";
+import { REPO_URL } from "./Legal";
 import { AXIS_TICK, compact, MODE_COLOR, MODE_LABEL, ms, num, pct, TOOLTIP } from "../format";
 import { MODES, type PopularityBucket, type Split, type Summary } from "../types";
 
@@ -31,6 +34,8 @@ export default function Overview({ summary }: { summary: Summary }) {
 
   return (
     <>
+      <Hero summary={summary} />
+
       <div className="toolbar">
         <span className="muted">Split</span>
         <div className="segmented">
@@ -89,6 +94,7 @@ export default function Overview({ summary }: { summary: Summary }) {
           obscure subjects; where the orange and blue lines overlap, adaptive retrieved just like always-retrieve.
         </p>
         {pop.error && <p className="error">{pop.error}</p>}
+        {!pop.data && !pop.error && <ChartSkeleton title={false} />}
         {pop.data && (
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={pop.data} margin={{ top: 8, right: 8, bottom: 0, left: -8 }}>
@@ -117,5 +123,45 @@ export default function Overview({ summary }: { summary: Summary }) {
         <p className="muted small">X axis: upper edge of each bucket, in monthly page views.</p>
       </section>
     </>
+  );
+}
+
+function Hero({ summary }: { summary: Summary }) {
+  const test = (m: (typeof MODES)[number]) => summary.runs.find((r) => r.mode === m && r.split === "test")!;
+  const [never, always, adaptive] = MODES.map(test);
+  return (
+    <section className="hero">
+      <div className="hero-copy">
+        <p className="eyebrow">PopQA · Llama 3 8B · 1,000 questions</p>
+        <h1>Looking it up more than doubles accuracy.</h1>
+        <p className="lead">
+          On 500 held-out questions, letting the model read Wikipedia first raised accuracy from{" "}
+          <strong>{pct(never.accuracy)}</strong> to <strong>{pct(always.accuracy)}</strong> and cut hallucinations from{" "}
+          {pct(never.hallucination_rate)} to {pct(always.hallucination_rate)}. The adaptive policy matches it within a
+          point while skipping retrieval for {pct(1 - adaptive.retrieval_rate, 0)} of questions.
+        </p>
+        <div className="cta-row">
+          <Link href="/questions" className="btn primary">
+            Browse the 1,000 questions <span aria-hidden="true">→</span>
+          </Link>
+          <a href={REPO_URL} className="btn">
+            Read the code
+          </a>
+        </div>
+        <p className="model">{summary.model}</p>
+      </div>
+      <figure className="hero-stat" aria-label="Accuracy without and with retrieval">
+        {[never, always].map((r) => (
+          <div key={r.mode} className="hero-bar">
+            <span className="muted small">{MODE_LABEL[r.mode]}</span>
+            <div className="track">
+              <div className="fill" style={{ width: pct(r.accuracy), background: MODE_COLOR[r.mode] }} />
+            </div>
+            <span className="hero-num">{pct(r.accuracy)}</span>
+          </div>
+        ))}
+        <figcaption className="muted small">Accuracy on the held-out test split</figcaption>
+      </figure>
+    </section>
   );
 }

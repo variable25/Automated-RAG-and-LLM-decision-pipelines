@@ -3,6 +3,8 @@ import {
   CartesianGrid, LabelList, Legend, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis,
 } from "recharts";
 import { useApi } from "../api";
+import { useMediaQuery } from "../media";
+import { CardsSkeleton, ChartSkeleton } from "../Skeleton";
 import { AXIS_TICK, MODE_COLOR, MODE_LABEL, num, pct, TOOLTIP } from "../format";
 import type { Frontier as FrontierData, Summary } from "../types";
 
@@ -16,6 +18,7 @@ interface Point {
 
 export default function Frontier({ summary }: { summary: Summary }) {
   const { data, error } = useApi<FrontierData>("/api/frontier");
+  const narrow = useMediaQuery("(max-width: 640px)");
 
   const series = useMemo(() => {
     if (!data) return undefined;
@@ -33,7 +36,13 @@ export default function Frontier({ summary }: { summary: Summary }) {
   }, [data]);
 
   if (error) return <p className="error">{error}</p>;
-  if (!series) return <p className="muted">Loading…</p>;
+  if (!series)
+    return (
+      <>
+        <ChartSkeleton height={420} />
+        <CardsSkeleton count={2} />
+      </>
+    );
   const adaptive = series.modes.find((m) => m.mode === "adaptive")!;
 
   return (
@@ -45,7 +54,7 @@ export default function Frontier({ summary }: { summary: Summary }) {
           (about 6× slower per question), so points further left are cheaper. The line joins the settings that no other
           setting beats on both axes.
         </p>
-        <ResponsiveContainer width="100%" height={420}>
+        <ResponsiveContainer width="100%" height={narrow ? 320 : 420}>
           <ScatterChart margin={{ top: 8, right: 16, bottom: 16, left: -8 }}>
             <CartesianGrid stroke="var(--grid)" />
             <XAxis
@@ -67,9 +76,9 @@ export default function Frontier({ summary }: { summary: Summary }) {
               tickFormatter={(v: number) => pct(v, 0)}
               tick={AXIS_TICK}
             />
-            <ZAxis range={[36, 36]} />
+            <ZAxis range={narrow ? [20, 20] : [36, 36]} />
             <Tooltip contentStyle={TOOLTIP} content={<PointTip />} cursor={{ strokeDasharray: "3 3" }} />
-            <Legend verticalAlign="top" height={32} itemSorter={null} />
+            <Legend verticalAlign="top" height={narrow ? 72 : 32} itemSorter={null} wrapperStyle={{ fontSize: narrow ? 12 : 14 }} />
             <Scatter name="Threshold setting" data={series.grid} fill="var(--dot)" isAnimationActive={false} />
             <Scatter
               name="Best trade-offs"

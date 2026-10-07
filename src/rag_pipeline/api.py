@@ -1,19 +1,23 @@
 """Read-only JSON API over results/*.csv, plus the built dashboard (web/dist) at /.
 
+Dashboard pages are client-side routes: known ones get index.html with 200, anything else gets
+index.html with 404 so the app renders its own not-found page and crawlers see a real 404.
+
 Run: uvicorn rag_pipeline.api:app --reload
 """
 from functools import lru_cache
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 
 from rag_pipeline import results
 from rag_pipeline.config import ROOT
 
 WEB_DIST = ROOT / "web" / "dist"
 N_BUCKETS = 10
+PAGES = {"", "frontier", "questions", "privacy", "terms"}
 
 app = FastAPI(title="RAG decision pipeline explorer")
 
@@ -77,5 +81,18 @@ def questions() -> list[dict]:
     return out
 
 
-if WEB_DIST.exists():
-    app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
+@app.get("/{path:path}", include_in_schema=False)
+def web(path: str) -> FileResponse:
+    if path.startswith("api/"):
+        raise HTTPException(404, "Unknown API endpoint")
+    dist = WEB_DIST.resolve()
+    index = dist / "index.html"
+    if not index.exists():
+        raise HTTPException(404, "Dashboard not built: run `npm run build` in web/")
+    file = (dist / path).resolve()
+    if path and file.is_file() and file.is_relative_to(dist):
+        # Vite fingerprints everything under assets/, so it can be cached forever.
+        cache = "public, max-age=31536000, immutable" if path.startswith("assets/") else "no-cache"
+        return FileResponse(file, headers={"Cache-Control": cache})
+    status = 200 if path.strip("/") in PAGES else 404
+    return FileResponse(index, status_code=status, headers={"Cache-Control": "no-cache"})

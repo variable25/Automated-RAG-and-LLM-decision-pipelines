@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import { useApi } from "../api";
+import { TableSkeleton } from "../Skeleton";
 import { MODE_LABEL, num, pct } from "../format";
 import { MODES, type Mode, type ModeAnswer, type Question, type Verdict } from "../types";
 
@@ -66,7 +67,7 @@ export default function Questions() {
   }
 
   if (error) return <p className="error">{error}</p>;
-  if (!data) return <p className="muted">Loading…</p>;
+  if (!data) return <TableSkeleton />;
 
   return (
     <section className="panel">
@@ -97,7 +98,7 @@ export default function Questions() {
             ))}
           </select>
         </label>
-        <label>
+        <label className="wide">
           Show
           <select value={focus} onChange={(e) => update(setFocus, e.target.value as Focus)}>
             {Object.entries(FOCUS).map(([k, f]) => (
@@ -107,7 +108,7 @@ export default function Questions() {
             ))}
           </select>
         </label>
-        <label>
+        <label className="wide">
           Result
           <span className="pair">
             <select value={verdict} onChange={(e) => update(setVerdict, e.target.value as Verdict | "any")}>
@@ -132,7 +133,7 @@ export default function Questions() {
       </p>
 
       <div className="table-wrap">
-        <table>
+        <table className="qtable">
           <thead>
             <tr>
               <th>Question</th>
@@ -150,20 +151,22 @@ export default function Questions() {
                   onClick={() => setOpen(open === q.question_id ? null : q.question_id)}
                 >
                   <td>
-                    <div>{q.question}</div>
+                    <div className="qtext">{q.question}</div>
                     <div className="muted small">
                       {q.prop} · {num(q.s_pop)} views/month
                     </div>
                   </td>
-                  <td className="small">
+                  <td className="small" data-label="Accepted">
                     {q.answers.slice(0, 3).join(", ")}
                     {q.answers.length > 3 && "…"}
                   </td>
                   {MODES.map((m) => (
-                    <td key={m}>
+                    <td key={m} data-label={MODE_LABEL[m]}>
                       <div className="answer">{q[m].answer || <span className="muted">(empty)</span>}</div>
-                      <Badge v={q[m].verdict} />
-                      {q[m].retrieved && <span className="tag">retrieved</span>}
+                      <div className="marks">
+                        <Badge v={q[m].verdict} />
+                        {q[m].retrieved && <span className="tag">retrieved</span>}
+                      </div>
                     </td>
                   ))}
                 </tr>
