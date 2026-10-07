@@ -20,3 +20,19 @@ jobs:
       # Tests are pure Python: no GPU, model weights or Postgres needed.
       - run: pip install -r requirements.txt -r requirements-api.txt
       - run: pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # Type-checks the dashboard and builds it.
+      - run: npm ci
+      - run: npm run build
