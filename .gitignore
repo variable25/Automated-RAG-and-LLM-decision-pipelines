@@ -1,0 +1,23 @@
+# secrets
+.env
+*.pem
+*.key
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# data / models (large, regenerable)
+data/raw/
+data/cache/
+models/
+hf_cache/
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
