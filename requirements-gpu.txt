@@ -1,0 +1,6 @@
+# Local GPU inference only (not used in CI or Cloud Run).
+# Install torch first from the CUDA index:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+transformers>=4.44
+accelerate>=0.33
+bitsandbytes>=0.43
