@@ -12,7 +12,8 @@ Metrics (per mode)
   abstain_rate       : "I don't know"
   retrieval_rate     : share of questions that triggered retrieval (cost proxy)
 
-Thresholds are tuned on a 50% tune split and reported on the held-out test split.
+Thresholds are tuned on a 50% tune split (fewest retrievals within ACC_TOLERANCE of the best
+accuracy) and reported on the held-out test split.
 
 Run: python -m rag_pipeline.evaluate
 """
@@ -32,7 +33,8 @@ from rag_pipeline.db import connect, init_schema
 RESULTS_DIR = ROOT / "results"
 CONF_GRID = np.round(np.arange(0.0, 1.0001, 0.05), 2)
 POP_QUANTILES = np.arange(0.0, 1.0001, 0.1)
-EXPORT_COLS = ["answer", "confidence", "correct", "correct_strict", "hallucinated", "retrieved"]
+ACC_TOLERANCE = 0.01  # accuracy we'll give up (on the tune split) to retrieve less
+EXPORT_COLS =["answer", "confidence", "correct", "correct_strict", "hallucinated", "retrieved"]
 _ABSTAIN = re.compile(r"\b(i don'?t know|i do not know|unknown|not sure)\b")
 _ARTICLES = re.compile(r"\b(a|an|the)\b")
 # too vague to count as a match on their own ("film" vs "horror film")
@@ -134,16 +136,24 @@ def metrics(p: pd.DataFrame) -> dict:
     }
 
 
-def tune(w: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """Grid-search (pop, conf) thresholds. Objective: max accuracy, tie-break fewer retrievals."""
+def tune(w: pd.DataFrame, tolerance: float = ACC_TOLERANCE) -> tuple[pd.DataFrame, dict]:
+    """Grid-search (pop, conf) thresholds. Objective: fewest retrievals among settings within
+    `tolerance` of the best accuracy, tie-break higher accuracy."""
     pops = sorted(set(np.quantile(w["s_pop"], POP_QUANTILES).round().tolist()) | {0.0})
     rows = [
         {"pop_threshold": pt, "conf_threshold": float(ct), **metrics(apply_policy(w, "adaptive", pt, ct))}
         for pt in pops for ct in CONF_GRID
     ]
     grid = pd.DataFrame(rows)
-    best = grid.sort_values(["accuracy", "retrieval_rate"], ascending=[False, True]).iloc[0]
+    ok = grid[grid["accuracy"] >= grid["accuracy"].max() - tolerance - 1e-9]
+    best = ok.sort_values(["retrieval_rate", "accuracy"], ascending=[True, False]).iloc[0]
     return grid, {"pop_threshold": float(best.pop_threshold), "conf_threshold": float(best.conf_threshold)}
+
+
+def pareto(grid: pd.DataFrame) -> pd.DataFrame:
+    """Settings where no other setting is both more accurate and retrieves less."""
+    g = grid.sort_values(["retrieval_rate", "accuracy"], ascending=[True, False])
+    return g[g["accuracy"] > g["accuracy"].cummax().shift(fill_value=-1)].reset_index(drop=True)
 
 
 def split(w: pd.DataFrame, seed: int = SEED) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -208,6 +218,7 @@ def main() -> None:
             # exports for the (DB-less) Streamlit explorer
             pd.DataFrame(summary).to_csv(RESULTS_DIR / "summary.csv", index=False)
             grid.to_csv(RESULTS_DIR / "threshold_grid.csv", index=False)
+            pareto(grid).to_csv(RESULTS_DIR / "pareto.csv", index=False)
             per_q = w[["question", "prop", "s_pop"]].copy()
             per_q["answers"] = w["possible_answers"].map(json.dumps)
             per_q["split"] = np.where(w.index.isin(test_w.index), "test", "tune")
