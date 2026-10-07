@@ -28,6 +28,8 @@ def test_is_correct_folds_accents():
     ("Slasher film.", ["horror film"], False),          # different genre
     ("Film.", ["horror film"], False),                  # too vague
     ("Anglican Church", ["Catholic Church"], False),
+    ("Oklahoma.", ["Muskogee County, Oklahoma"], False),  # qualifier after the comma
+    ("Melbourne.", ["Melbourne, Victoria"], True),
     ("I don't know.", ["I Know"], False),          # abstentions never match
     ("Stephen Mazur.", ["Steven Shainberg"], False),
 ])

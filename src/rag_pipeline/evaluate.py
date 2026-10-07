@@ -74,7 +74,8 @@ def is_correct_lenient(answer: str, possible_answers: list[str]) -> bool:
         gt = set(g.split())
         if not g:
             continue
-        if at and at <= gt and at - _GENERIC:  # partial answer, e.g. surname only
+        head = set(normalize(p.split(",")[0]).split())  # "Muskogee County, Oklahoma" -> not "Oklahoma"
+        if at and at <= head and at - _GENERIC:  # partial answer, e.g. surname only
             return True
         if gt <= at and gt - _GENERIC:  # same words, different order
             return True
