@@ -1,7 +1,8 @@
 import pandas as pd
 import pytest
 
-from rag_pipeline.evaluate import apply_policy, is_abstain, is_correct, metrics, score, tune, wide
+from rag_pipeline.evaluate import (apply_policy, is_abstain, is_correct, is_correct_lenient, metrics, pareto, score,
+                                   tune, wide)
 
 
 @pytest.mark.parametrize("answer,answers,expected", [
@@ -13,6 +14,33 @@ from rag_pipeline.evaluate import apply_policy, is_abstain, is_correct, metrics,
 ])
 def test_is_correct(answer, answers, expected):
     assert is_correct(answer, answers) is expected
+
+
+def test_is_correct_folds_accents():
+    assert is_correct("Sebastian Gutiérrez.", ["Sebastian Gutierrez"])
+
+
+@pytest.mark.parametrize("answer,answers,expected", [
+    ("Catholic.", ["Catholic Church"], True),           # partial answer
+    ("Jutra.", ["Claude Jutra"], True),                 # surname only
+    ("Noir crime film.", ["film noir"], True),          # reordered words
+    ("Swein Forkbeard.", ["Sweyn Forkbeard"], True),    # spelling variant
+    ("Slasher film.", ["horror film"], False),          # different genre
+    ("Film.", ["horror film"], False),                  # too vague
+    ("Anglican Church", ["Catholic Church"], False),
+    ("Oklahoma.", ["Muskogee County, Oklahoma"], False),  # qualifier after the comma
+    ("Melbourne.", ["Melbourne, Victoria"], True),
+    ("I don't know.", ["I Know"], False),          # abstentions never match
+    ("Stephen Mazur.", ["Steven Shainberg"], False),
+])
+def test_is_correct_lenient(answer, answers, expected):
+    assert is_correct_lenient(answer, answers) is expected
+
+
+def test_score_keeps_strict_alongside_lenient():
+    df = score(pd.DataFrame({"answer": ["Catholic.", "Paris"], "possible_answers": [["Catholic Church"], ["paris"]]}))
+    assert df["correct"].tolist() == [True, True]
+    assert df["correct_strict"].tolist() == [False, True]
 
 
 def test_is_abstain():
@@ -51,3 +79,17 @@ def test_tune_prefers_fewer_retrievals_at_equal_accuracy():
     best_row = grid.query("pop_threshold == @best['pop_threshold'] and conf_threshold == @best['conf_threshold']")
     assert best_row["accuracy"].iloc[0] == 1.0
     assert best_row["retrieval_rate"].iloc[0] == pytest.approx(2 / 3)
+
+
+def test_tune_trades_small_accuracy_loss_for_fewer_retrievals():
+    grid, best = tune(_gen(), tolerance=0.34)  # one of three questions may be given up
+    best_row = grid.query("pop_threshold == @best['pop_threshold'] and conf_threshold == @best['conf_threshold']")
+    assert best_row["accuracy"].iloc[0] == pytest.approx(2 / 3)
+    assert best_row["retrieval_rate"].iloc[0] == pytest.approx(1 / 3)
+
+
+def test_pareto_keeps_only_undominated_settings():
+    grid = pd.DataFrame({"retrieval_rate": [0.0, 0.2, 0.2, 0.5, 0.9],
+                         "accuracy":       [0.2, 0.5, 0.4, 0.5, 0.6]})
+    front = pareto(grid)
+    assert front[["retrieval_rate", "accuracy"]].values.tolist() == [[0.0, 0.2], [0.2, 0.5], [0.9, 0.6]]

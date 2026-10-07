@@ -1,18 +1,27 @@
 """Stage 3: score cached generations, tune adaptive thresholds, store runs in Postgres.
 
+Scoring
+  lenient (primary)  : strict match, or answer tokens within an accepted answer ("Catholic" ~
+                       "Catholic Church"), or an accepted answer's tokens within the output in any
+                       order ("noir crime film" ~ "film noir"), or a near-identical spelling
+  strict (audit)     : an accepted PopQA answer string appears in the normalized output
+
 Metrics (per mode)
-  accuracy           : any accepted PopQA answer string appears in the normalized output
+  accuracy           : lenient score; strict_accuracy is kept alongside for audits
   hallucination_rate : answered (not "I don't know") but wrong
   abstain_rate       : "I don't know"
   retrieval_rate     : share of questions that triggered retrieval (cost proxy)
 
-Thresholds are tuned on a 50% tune split and reported on the held-out test split.
+Thresholds are tuned on a 50% tune split (fewest retrievals within ACC_TOLERANCE of the best
+accuracy) and reported on the held-out test split.
 
 Run: python -m rag_pipeline.evaluate
 """
 import json
 import re
 import string
+import unicodedata
+from difflib import SequenceMatcher
 
 import numpy as np
 import pandas as pd
@@ -24,13 +33,22 @@ from rag_pipeline.db import connect, init_schema
 RESULTS_DIR = ROOT / "results"
 CONF_GRID = np.round(np.arange(0.0, 1.0001, 0.05), 2)
 POP_QUANTILES = np.arange(0.0, 1.0001, 0.1)
+ACC_TOLERANCE = 0.01  # accuracy we'll give up (on the tune split) to retrieve less
+EXPORT_COLS =["answer", "confidence", "correct", "correct_strict", "hallucinated", "retrieved"]
 _ABSTAIN = re.compile(r"\b(i don'?t know|i do not know|unknown|not sure)\b")
 _ARTICLES = re.compile(r"\b(a|an|the)\b")
+# too vague to count as a match on their own ("film" vs "horror film")
+_GENERIC = {"film", "movie", "music", "church", "album", "song", "band", "series", "novel", "rock", "pop"}
+FUZZY_RATIO = 0.9
 
 
 # ---------- scoring ----------
+def _fold_accents(s: str) -> str:
+    return "".join(ch for ch in unicodedata.normalize("NFKD", s) if not unicodedata.combining(ch))
+
+
 def normalize(s: str) -> str:
-    s = s.lower().replace("’", "'")
+    s = _fold_accents(s).lower().replace("’", "'")
     s = "".join(ch for ch in s if ch not in set(string.punctuation) - {"'"})
     return " ".join(_ARTICLES.sub(" ", s).split())
 
@@ -44,9 +62,32 @@ def is_correct(answer: str, possible_answers: list[str]) -> bool:
     return any(normalize(p) and normalize(p) in a for p in possible_answers)
 
 
+def is_correct_lenient(answer: str, possible_answers: list[str]) -> bool:
+    if is_correct(answer, possible_answers):
+        return True
+    if is_abstain(answer):
+        return False
+    a = normalize(answer)
+    at = set(a.split())
+    for p in possible_answers:
+        g = normalize(p)
+        gt = set(g.split())
+        if not g:
+            continue
+        head = set(normalize(p.split(",")[0]).split())  # "Muskogee County, Oklahoma" -> not "Oklahoma"
+        if at and at <= head and at - _GENERIC:  # partial answer, e.g. surname only
+            return True
+        if gt <= at and gt - _GENERIC:  # same words, different order
+            return True
+        if len(g) >= 6 and SequenceMatcher(None, a, g).ratio() >= FUZZY_RATIO:  # spelling variant
+            return True
+    return False
+
+
 def score(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["correct"] = [is_correct(a, p) for a, p in zip(df["answer"], df["possible_answers"])]
+    df["correct_strict"] = [is_correct(a, p) for a, p in zip(df["answer"], df["possible_answers"])]
+    df["correct"] = [is_correct_lenient(a, p) for a, p in zip(df["answer"], df["possible_answers"])]
     df["abstained"] = df["answer"].map(is_abstain) & ~df["correct"]
     df["hallucinated"] = ~df["correct"] & ~df["abstained"]
     return df
@@ -58,7 +99,7 @@ def wide(gen: pd.DataFrame) -> pd.DataFrame:
     c = gen[~gen["with_context"]].set_index("question_id")
     r = gen[gen["with_context"]].set_index("question_id")
     base = c[["question", "prop", "s_pop", "possible_answers"]]
-    cols = ["answer", "confidence", "correct", "abstained", "hallucinated", "latency_ms"]
+    cols = ["answer", "confidence", "correct", "correct_strict", "abstained", "hallucinated", "latency_ms"]
     return base.join(c[cols].add_suffix("_c")).join(r[cols].add_suffix("_r")).dropna(subset=["answer_r"])
 
 
@@ -75,7 +116,7 @@ def apply_policy(w: pd.DataFrame, mode: str, pop_t: float = 0, conf_t: float = 0
         retrieve = by_pop | (w["confidence_c"] < conf_t)
     out = pd.DataFrame(index=w.index)
     out["retrieved"] = retrieve
-    for col in ["answer", "confidence", "correct", "abstained", "hallucinated"]:
+    for col in ["answer", "confidence", "correct", "correct_strict", "abstained", "hallucinated"]:
         out[col] = np.where(retrieve, w[f"{col}_r"], w[f"{col}_c"])
     # rare entities skip the closed-book pass; confidence fallbacks pay for both passes
     out["latency_ms"] = np.select(
@@ -88,6 +129,7 @@ def metrics(p: pd.DataFrame) -> dict:
     return {
         "n": int(len(p)),
         "accuracy": float(p["correct"].mean()),
+        "strict_accuracy": float(p["correct_strict"].mean()),
         "hallucination_rate": float(p["hallucinated"].mean()),
         "abstain_rate": float(p["abstained"].mean()),
         "retrieval_rate": float(p["retrieved"].mean()),
@@ -95,16 +137,24 @@ def metrics(p: pd.DataFrame) -> dict:
     }
 
 
-def tune(w: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """Grid-search (pop, conf) thresholds. Objective: max accuracy, tie-break fewer retrievals."""
+def tune(w: pd.DataFrame, tolerance: float = ACC_TOLERANCE) -> tuple[pd.DataFrame, dict]:
+    """Grid-search (pop, conf) thresholds. Objective: fewest retrievals among settings within
+    `tolerance` of the best accuracy, tie-break higher accuracy."""
     pops = sorted(set(np.quantile(w["s_pop"], POP_QUANTILES).round().tolist()) | {0.0})
     rows = [
         {"pop_threshold": pt, "conf_threshold": float(ct), **metrics(apply_policy(w, "adaptive", pt, ct))}
         for pt in pops for ct in CONF_GRID
     ]
     grid = pd.DataFrame(rows)
-    best = grid.sort_values(["accuracy", "retrieval_rate"], ascending=[False, True]).iloc[0]
+    ok = grid[grid["accuracy"] >= grid["accuracy"].max() - tolerance - 1e-9]
+    best = ok.sort_values(["retrieval_rate", "accuracy"], ascending=[True, False]).iloc[0]
     return grid, {"pop_threshold": float(best.pop_threshold), "conf_threshold": float(best.conf_threshold)}
+
+
+def pareto(grid: pd.DataFrame) -> pd.DataFrame:
+    """Settings where no other setting is both more accurate and retrieves less."""
+    g = grid.sort_values(["retrieval_rate", "accuracy"], ascending=[True, False])
+    return g[g["accuracy"] > g["accuracy"].cummax().shift(fill_value=-1)].reset_index(drop=True)
 
 
 def split(w: pd.DataFrame, seed: int = SEED) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -126,16 +176,18 @@ def load_generations(conn) -> pd.DataFrame:
 
 def save_run(conn, model, mode, params, split_name, m, preds: pd.DataFrame) -> int:
     run_id = conn.execute(
-        """INSERT INTO runs (model, mode, params, split, n, accuracy, hallucination_rate, abstain_rate,
-                             retrieval_rate, avg_latency_ms)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-        (model, mode, Jsonb(params), split_name, m["n"], m["accuracy"], m["hallucination_rate"],
-         m["abstain_rate"], m["retrieval_rate"], m["avg_latency_ms"]),
+        """INSERT INTO runs (model, mode, params, split, n, accuracy, strict_accuracy, hallucination_rate,
+                             abstain_rate, retrieval_rate, avg_latency_ms)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+        (model, mode, Jsonb(params), split_name, m["n"], m["accuracy"], m["strict_accuracy"],
+         m["hallucination_rate"], m["abstain_rate"], m["retrieval_rate"], m["avg_latency_ms"]),
     ).fetchone()[0]
     conn.cursor().executemany(
-        """INSERT INTO predictions (run_id, question_id, retrieved, answer, confidence, correct, hallucinated)
-           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-        [(run_id, int(q), bool(r.retrieved), r.answer, float(r.confidence), bool(r.correct), bool(r.hallucinated))
+        """INSERT INTO predictions (run_id, question_id, retrieved, answer, confidence, correct, correct_strict,
+                                    hallucinated)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+        [(run_id, int(q), bool(r.retrieved), r.answer, float(r.confidence), bool(r.correct),
+          bool(r.correct_strict), bool(r.hallucinated))
          for q, r in preds.iterrows()],
     )
     return run_id
@@ -152,6 +204,7 @@ def main() -> None:
             grid, best = tune(tune_w)
             policies = {"never": {}, "always": {}, "adaptive": best}
             summary, test_preds = [], {}
+            conn.execute("DELETE FROM runs WHERE model = %s", (model,))  # re-runs replace, predictions cascade
             for mode, params in policies.items():
                 pt, ct = params.get("pop_threshold", 0), params.get("conf_threshold", 0)
                 for split_name, part in [("tune", tune_w), ("test", test_w), ("all", w)]:
@@ -167,17 +220,17 @@ def main() -> None:
             # exports for the (DB-less) Streamlit explorer
             pd.DataFrame(summary).to_csv(RESULTS_DIR / "summary.csv", index=False)
             grid.to_csv(RESULTS_DIR / "threshold_grid.csv", index=False)
+            pareto(grid).to_csv(RESULTS_DIR / "pareto.csv", index=False)
             per_q = w[["question", "prop", "s_pop"]].copy()
             per_q["answers"] = w["possible_answers"].map(json.dumps)
             per_q["split"] = np.where(w.index.isin(test_w.index), "test", "tune")
             for mode, p in test_preds.items():
-                per_q[[f"{mode}_{c}" for c in ["answer", "confidence", "correct", "hallucinated", "retrieved"]]] = \
-                    p[["answer", "confidence", "correct", "hallucinated", "retrieved"]].values
+                per_q[[f"{mode}_{c}" for c in EXPORT_COLS]] = p[EXPORT_COLS].values
             per_q.reset_index().to_csv(RESULTS_DIR / "predictions.csv", index=False)
 
             test = pd.DataFrame(summary).query("split == 'test'")
             print(f"model={model} best thresholds={best}")
-            print(test[["mode", "accuracy", "hallucination_rate", "abstain_rate", "retrieval_rate",
+            print(test[["mode", "accuracy", "strict_accuracy", "hallucination_rate", "abstain_rate", "retrieval_rate",
                         "avg_latency_ms"]].round(3).to_string(index=False))
 
 
