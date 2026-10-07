@@ -62,3 +62,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     hallucinated BOOLEAN NOT NULL,
     PRIMARY KEY (run_id, question_id)
 );
+
+-- Stage 3: lenient scoring is primary; the strict score is kept for audits.
+ALTER TABLE runs        ADD COLUMN IF NOT EXISTS strict_accuracy REAL;
+ALTER TABLE predictions ADD COLUMN IF NOT EXISTS correct_strict  BOOLEAN;

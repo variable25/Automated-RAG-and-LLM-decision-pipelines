@@ -32,6 +32,7 @@ from rag_pipeline.db import connect, init_schema
 RESULTS_DIR = ROOT / "results"
 CONF_GRID = np.round(np.arange(0.0, 1.0001, 0.05), 2)
 POP_QUANTILES = np.arange(0.0, 1.0001, 0.1)
+EXPORT_COLS = ["answer", "confidence", "correct", "correct_strict", "hallucinated", "retrieved"]
 _ABSTAIN = re.compile(r"\b(i don'?t know|i do not know|unknown|not sure)\b")
 _ARTICLES = re.compile(r"\b(a|an|the)\b")
 # too vague to count as a match on their own ("film" vs "horror film")
@@ -95,7 +96,7 @@ def wide(gen: pd.DataFrame) -> pd.DataFrame:
     c = gen[~gen["with_context"]].set_index("question_id")
     r = gen[gen["with_context"]].set_index("question_id")
     base = c[["question", "prop", "s_pop", "possible_answers"]]
-    cols = ["answer", "confidence", "correct", "abstained", "hallucinated", "latency_ms"]
+    cols = ["answer", "confidence", "correct", "correct_strict", "abstained", "hallucinated", "latency_ms"]
     return base.join(c[cols].add_suffix("_c")).join(r[cols].add_suffix("_r")).dropna(subset=["answer_r"])
 
 
@@ -112,7 +113,7 @@ def apply_policy(w: pd.DataFrame, mode: str, pop_t: float = 0, conf_t: float = 0
         retrieve = by_pop | (w["confidence_c"] < conf_t)
     out = pd.DataFrame(index=w.index)
     out["retrieved"] = retrieve
-    for col in ["answer", "confidence", "correct", "abstained", "hallucinated"]:
+    for col in ["answer", "confidence", "correct", "correct_strict", "abstained", "hallucinated"]:
         out[col] = np.where(retrieve, w[f"{col}_r"], w[f"{col}_c"])
     # rare entities skip the closed-book pass; confidence fallbacks pay for both passes
     out["latency_ms"] = np.select(
@@ -125,6 +126,7 @@ def metrics(p: pd.DataFrame) -> dict:
     return {
         "n": int(len(p)),
         "accuracy": float(p["correct"].mean()),
+        "strict_accuracy": float(p["correct_strict"].mean()),
         "hallucination_rate": float(p["hallucinated"].mean()),
         "abstain_rate": float(p["abstained"].mean()),
         "retrieval_rate": float(p["retrieved"].mean()),
@@ -163,16 +165,18 @@ def load_generations(conn) -> pd.DataFrame:
 
 def save_run(conn, model, mode, params, split_name, m, preds: pd.DataFrame) -> int:
     run_id = conn.execute(
-        """INSERT INTO runs (model, mode, params, split, n, accuracy, hallucination_rate, abstain_rate,
-                             retrieval_rate, avg_latency_ms)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-        (model, mode, Jsonb(params), split_name, m["n"], m["accuracy"], m["hallucination_rate"],
-         m["abstain_rate"], m["retrieval_rate"], m["avg_latency_ms"]),
+        """INSERT INTO runs (model, mode, params, split, n, accuracy, strict_accuracy, hallucination_rate,
+                             abstain_rate, retrieval_rate, avg_latency_ms)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+        (model, mode, Jsonb(params), split_name, m["n"], m["accuracy"], m["strict_accuracy"],
+         m["hallucination_rate"], m["abstain_rate"], m["retrieval_rate"], m["avg_latency_ms"]),
     ).fetchone()[0]
     conn.cursor().executemany(
-        """INSERT INTO predictions (run_id, question_id, retrieved, answer, confidence, correct, hallucinated)
-           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-        [(run_id, int(q), bool(r.retrieved), r.answer, float(r.confidence), bool(r.correct), bool(r.hallucinated))
+        """INSERT INTO predictions (run_id, question_id, retrieved, answer, confidence, correct, correct_strict,
+                                    hallucinated)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+        [(run_id, int(q), bool(r.retrieved), r.answer, float(r.confidence), bool(r.correct),
+          bool(r.correct_strict), bool(r.hallucinated))
          for q, r in preds.iterrows()],
     )
     return run_id
@@ -208,13 +212,12 @@ def main() -> None:
             per_q["answers"] = w["possible_answers"].map(json.dumps)
             per_q["split"] = np.where(w.index.isin(test_w.index), "test", "tune")
             for mode, p in test_preds.items():
-                per_q[[f"{mode}_{c}" for c in ["answer", "confidence", "correct", "hallucinated", "retrieved"]]] = \
-                    p[["answer", "confidence", "correct", "hallucinated", "retrieved"]].values
+                per_q[[f"{mode}_{c}" for c in EXPORT_COLS]] = p[EXPORT_COLS].values
             per_q.reset_index().to_csv(RESULTS_DIR / "predictions.csv", index=False)
 
             test = pd.DataFrame(summary).query("split == 'test'")
             print(f"model={model} best thresholds={best}")
-            print(test[["mode", "accuracy", "hallucination_rate", "abstain_rate", "retrieval_rate",
+            print(test[["mode", "accuracy", "strict_accuracy", "hallucination_rate", "abstain_rate", "retrieval_rate",
                         "avg_latency_ms"]].round(3).to_string(index=False))
 
 
