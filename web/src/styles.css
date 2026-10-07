@@ -1,4 +1,7 @@
 :root {
+  /* Self-hosted (bundled) fonts: no request to a third-party font service. */
+  --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
   --bg: #f7f7f5;
   --surface: #ffffff;
   --text: #1c1d1f;
@@ -54,7 +57,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 15px/1.55 var(--font-sans);
 }
 
 h1,
@@ -99,7 +102,7 @@ select {
   margin: 4px 0 0;
 }
 .model {
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.8rem;
 }
 
@@ -161,8 +164,10 @@ select {
   padding: 16px;
 }
 .big {
-  font-size: 2.2rem;
-  font-weight: 650;
+  font-family: var(--font-mono);
+  font-size: 2.1rem;
+  font-weight: 400;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
   margin-top: 8px;
