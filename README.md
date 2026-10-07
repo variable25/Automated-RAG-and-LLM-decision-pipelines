@@ -9,7 +9,7 @@ Wikipedia context before answering, and measures the hallucination reduction on
 | 1. Setup + ETL | PopQA sample (1,000 Qs, popularity-stratified) + Wikipedia passages → Postgres (Docker) |
 | 2. Pipeline | Llama-3-8B-Instruct (4-bit, GPU). Modes: `never`, `always`, `adaptive` |
 | 3. Evaluate | Accuracy + hallucination rate per mode, threshold tuning, runs stored in Postgres |
-| 4. Ship | pytest + GitHub Actions, Dockerfile, Cloud Run Streamlit explorer |
+| 4. Ship | GitHub Actions CI, Dockerfile, FastAPI + React dashboard (Cloud Run) |
 
 ## Quickstart
 
@@ -52,3 +52,32 @@ is stored alongside for audits. In a hand check of 50 lenient-only matches, 43 w
 best on the tune split. Retrieval helps in every popularity decile for this 8B model, so the
 policy still retrieves for most questions; `results/pareto.csv` lists the cheaper trade-offs
 (e.g. retrieving for 60% of questions keeps ~58% accuracy on the tune split).
+
+## Dashboard (Stage 4)
+
+A read-only explorer over `results/*.csv`: no GPU, model or database needed.
+
+- **Overview**: the three policies side by side, and accuracy by subject popularity
+- **Accuracy vs. retrieval**: every adaptive threshold setting, the best trade-offs, and the chosen one
+- **Questions**: search and filter all 1,000 questions, with each policy's answer and strict vs. lenient scoring
+
+`src/rag_pipeline/api.py` (FastAPI) serves the CSVs as JSON under `/api` and the built React app
+(`web/`, TypeScript + Vite + Recharts) at `/`.
+
+```bash
+pip install -r requirements-api.txt
+cd web && npm ci && npm run build && cd ..
+uvicorn rag_pipeline.api:app --port 8000      # http://localhost:8000
+```
+
+For frontend work, run `npm run dev` in `web/` alongside uvicorn; Vite forwards `/api` to port 8000.
+
+With Docker (the same image Cloud Run runs):
+
+```bash
+docker build -t rag-explorer .
+docker run --rm -p 8080:8080 rag-explorer     # http://localhost:8080
+```
+
+CI (`.github/workflows/ci.yml`) runs pytest, type-checks and builds the dashboard, and builds and
+smoke-tests the Docker image on every pull request.
