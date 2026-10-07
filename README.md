@@ -4,7 +4,8 @@ LLMs hallucinate on rare facts. This pipeline decides **at runtime** whether to 
 Wikipedia context before answering, and measures the hallucination reduction on
 [PopQA](https://huggingface.co/datasets/akariasai/PopQA).
 
-**Live dashboard:** https://rag-explorer-879620820205.europe-west1.run.app
+**Live dashboard:** [rag-explorer-879620820205.europe-west1.run.app](https://rag-explorer-879620820205.europe-west1.run.app)
+([overview](https://rag-explorer-879620820205.europe-west1.run.app/) · [accuracy vs. retrieval](https://rag-explorer-879620820205.europe-west1.run.app/frontier) · [question browser](https://rag-explorer-879620820205.europe-west1.run.app/questions))
 
 | Stage | What |
 |---|---|
@@ -59,9 +60,15 @@ policy still retrieves for most questions; `results/pareto.csv` lists the cheape
 
 A read-only explorer over `results/*.csv`: no GPU, model or database needed.
 
-- **Overview**: the three policies side by side, and accuracy by subject popularity
-- **Accuracy vs. retrieval**: every adaptive threshold setting, the best trade-offs, and the chosen one
-- **Questions**: search and filter all 1,000 questions, with each policy's answer and strict vs. lenient scoring
+| Page | What it shows |
+|---|---|
+| [Overview](https://rag-explorer-879620820205.europe-west1.run.app/) | Headline result, the three policies side by side, accuracy by subject popularity |
+| [Accuracy vs. retrieval](https://rag-explorer-879620820205.europe-west1.run.app/frontier) | Every adaptive threshold setting, the best trade-offs, and the chosen one |
+| [Questions](https://rag-explorer-879620820205.europe-west1.run.app/questions) | Search and filter all 1,000 questions, with each policy's answer and strict vs. lenient scoring |
+| [Privacy](https://rag-explorer-879620820205.europe-west1.run.app/privacy) · [Terms](https://rag-explorer-879620820205.europe-west1.run.app/terms) | No cookies, analytics or third-party requests; only Cloud Run's standard request logs |
+
+Unknown paths get a custom 404 page with a real 404 status. Fonts (IBM Plex) are bundled, the
+layout adapts down to phone width, and animations respect the reduced-motion setting.
 
 `src/rag_pipeline/api.py` (FastAPI) serves the CSVs as JSON under `/api` and the built React app
 (`web/`, TypeScript + Vite + Recharts) at `/`.
