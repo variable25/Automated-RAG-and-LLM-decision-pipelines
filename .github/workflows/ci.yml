@@ -36,3 +36,14 @@ jobs:
       # Type-checks the dashboard and builds it.
       - run: npm ci
       - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t rag-explorer .
+      # Start the image the way Cloud Run does and check it answers.
+      - run: |
+          docker run -d --name app -p 8080:8080 rag-explorer
+          for i in $(seq 1 20); do curl -sf localhost:8080/api/health && exit 0; sleep 1; done
+          docker logs app; exit 1
