@@ -4,6 +4,8 @@ LLMs hallucinate on rare facts. This pipeline decides **at runtime** whether to 
 Wikipedia context before answering, and measures the hallucination reduction on
 [PopQA](https://huggingface.co/datasets/akariasai/PopQA).
 
+**Live dashboard:** https://rag-explorer-879620820205.europe-west1.run.app
+
 | Stage | What |
 |---|---|
 | 1. Setup + ETL | PopQA sample (1,000 Qs, popularity-stratified) + Wikipedia passages → Postgres (Docker) |
@@ -78,6 +80,15 @@ With Docker (the same image Cloud Run runs):
 docker build -t rag-explorer .
 docker run --rm -p 8080:8080 rag-explorer     # http://localhost:8080
 ```
+
+Deploy to Cloud Run (Google builds the Dockerfile; `.gcloudignore` keeps `.env` and local data out of the upload):
+
+```bash
+gcloud run deploy rag-explorer --source . --region=europe-west1 --allow-unauthenticated --max-instances=2 --project=rag-decision-explorer
+```
+
+It scales to zero when idle, and `--max-instances=2` caps cost under load. Re-run the same command
+after `results/` changes to publish new numbers.
 
 CI (`.github/workflows/ci.yml`) runs pytest, type-checks and builds the dashboard, and builds and
 smoke-tests the Docker image on every pull request.

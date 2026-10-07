@@ -1,0 +1,16 @@
+# Files NOT uploaded by `gcloud run deploy --source .` (same idea as .dockerignore).
+.gcloudignore
+.git/
+.gitignore
+.env
+.claude/
+.venv/
+.pytest_cache/
+**/__pycache__/
+*.egg-info/
+data/
+models/
+hf_cache/
+tests/
+web/node_modules/
+web/dist/
