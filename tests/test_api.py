@@ -47,3 +47,34 @@ def test_questions_nest_each_mode():
     assert isinstance(q["answers"], list)
     for m in results.MODES:
         assert set(q[m]) == set(results.MODE_FIELDS) | {"verdict"}
+
+
+@pytest.fixture
+def dist(tmp_path, monkeypatch):
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<div id=root></div>")
+    (tmp_path / "assets" / "app-abc123.js").write_text("console.log(1)")
+    monkeypatch.setattr("rag_pipeline.api.WEB_DIST", tmp_path)
+    return tmp_path
+
+
+@pytest.mark.parametrize("path", ["/", "/frontier", "/questions", "/privacy", "/terms"])
+def test_pages_serve_app(dist, path):
+    r = client.get(path)
+    assert r.status_code == 200 and "root" in r.text
+
+
+def test_unknown_page_serves_app_with_404(dist):
+    r = client.get("/no-such-page")
+    assert r.status_code == 404 and "root" in r.text
+
+
+def test_unknown_api_is_json_404(dist):
+    r = client.get("/api/nope")
+    assert r.status_code == 404 and r.json()["detail"] == "Unknown API endpoint"
+
+
+def test_assets_are_cached_and_traversal_blocked(dist):
+    r = client.get("/assets/app-abc123.js")
+    assert r.status_code == 200 and "immutable" in r.headers["cache-control"]
+    assert client.get("/..%2F..%2Fpyproject.toml").status_code == 404
